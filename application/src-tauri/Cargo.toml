@@ -20,6 +20,7 @@ block-modes = "0.8.1"
 hex = "0.4.3"
 rand = "0.8.5"
 hex-literal = "0.3.4"
+tempfile = "3.3.0"
 
 
 [features]

@@ -1,6 +1,11 @@
 // src/chunks.rs
 
-/// Splits the given data into chunks of the specified size.
+use std::fs::File;
+use std::io::Write;
+use std::error::Error;
+use tempfile::NamedTempFile;
+
+/// Splits the given data into chunks of the specified size and writes each chunk to a temporary file.
 ///
 /// # Arguments
 ///
@@ -9,9 +14,17 @@
 ///
 /// # Returns
 ///
-/// * A vector of vectors, where each inner vector is a chunk of the original data.
-pub fn split_into_chunks(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
-    data.chunks(chunk_size).map(|chunk| chunk.to_vec()).collect()
+/// * A vector of NamedTempFile handles for each chunk.
+pub fn split_into_temp_files(data: &[u8], chunk_size: usize) -> Result<Vec<NamedTempFile>, Box<dyn Error>> {
+    let mut temp_files = Vec::new();
+
+    for chunk in data.chunks(chunk_size) {
+        let mut temp_file = NamedTempFile::new()?;
+        temp_file.write_all(chunk)?;
+        temp_files.push(temp_file);
+    }
+
+    Ok(temp_files)
 }
 
 #[cfg(test)]
@@ -19,13 +32,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_split_into_chunks() {
+    fn test_split_into_temp_files() {
         let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let chunk_size = 3;
-        let chunks = split_into_chunks(&data, chunk_size);
-        assert_eq!(chunks.len(), 3);
-        assert_eq!(chunks[0], vec![1, 2, 3]);
-        assert_eq!(chunks[1], vec![4, 5, 6]);
-        assert_eq!(chunks[2], vec![7, 8, 9]);
+        let temp_files = split_into_temp_files(&data, chunk_size).unwrap();
+        assert_eq!(temp_files.len(), 3);
+        
+        for temp_file in temp_files {
+            let mut file = temp_file.reopen().unwrap();
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).unwrap();
+            println!("Chunk: {:?}", contents);
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use tauri::{command, Builder, generate_context, generate_handler};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 // Include the encode, decode, encrypt, decrypt, and chunks modules
@@ -16,7 +16,7 @@ use encode::encode_to_base64;
 use decode::decode_from_base64;
 use encrypt::encrypt;
 use decrypt::decrypt;
-use chunks::split_into_chunks;
+use chunks::split_into_temp_files;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
 
@@ -40,15 +40,21 @@ fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String, Stri
         .map_err(|e| format!("Encryption failed: {}", e.to_string()))?;
     println!("Encrypted Content: {:?}", encrypted_content);
 
-    // Split the encrypted content into 1MB chunks
-    let encrypted_chunks = split_into_chunks(&encrypted_content, CHUNK_SIZE);
-    println!("Encrypted Content divided into {} chunks", encrypted_chunks.len());
+    // Split the encrypted content into 1MB chunks and write to temporary files
+    let temp_files = split_into_temp_files(&encrypted_content, CHUNK_SIZE)
+        .map_err(|e| format!("Splitting into temp files failed: {}", e.to_string()))?;
+    println!("Encrypted Content divided into {} chunks", temp_files.len());
 
     // Save each chunk to the local file system
-    for (i, chunk) in encrypted_chunks.iter().enumerate() {
+    for (i, temp_file) in temp_files.iter().enumerate() {
         let chunk_path = PathBuf::from(format!("./{}_chunk_{}.enc", file_name, i));
         let mut chunk_file = File::create(&chunk_path).map_err(|e| e.to_string())?;
-        chunk_file.write_all(&chunk).map_err(|e| e.to_string())?;
+        
+        let mut temp_file_content = Vec::new();
+        let mut temp_file_handle = temp_file.reopen().map_err(|e| e.to_string())?;
+        temp_file_handle.read_to_end(&mut temp_file_content).map_err(|e| e.to_string())?;
+        
+        chunk_file.write_all(&temp_file_content).map_err(|e| e.to_string())?;
         println!("Saved chunk {} successfully", i);
     }
 
