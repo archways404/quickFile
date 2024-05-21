@@ -22,6 +22,7 @@ use decrypt::decrypt_temp;
 use chunks::split_into_temp_files;
 use upload::upload_chunks;
 use download::{download_files, rebuild_file, ResponseText};
+use std::sync::Arc;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
 
@@ -37,7 +38,7 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
     println!("Base64 Encoded Content written to temp file");
 
     // Decode the Base64 content from the temporary file
-    let decoded_temp_file = decode_from_base64_temp(&encoded_temp_file)
+    let _decoded_temp_file = decode_from_base64_temp(&encoded_temp_file)
         .map_err(|e| format!("Base64 decoding failed: {}", e.to_string()))?;
     println!("Decoded Content written to temp file");
 
@@ -57,7 +58,7 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
 
     // Save each chunk to the local file system (optional)
     for (i, temp_file) in temp_files.iter().enumerate() {
-        let chunk_path = PathBuf::from(format!("./chunks/chunk_{}.txt", i));
+        let chunk_path = PathBuf::from(format!("./chunk_{}.txt", i));
         let mut chunk_file = File::create(&chunk_path).map_err(|e| e.to_string())?;
         
         let mut temp_file_content = Vec::new();

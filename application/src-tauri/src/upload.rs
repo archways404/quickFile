@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 use tokio::task;
 use tokio::sync::Mutex;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone)]  // Implement Clone
 struct ChunkResponse {
     index: usize,
     link: String,
@@ -19,7 +19,7 @@ struct ResponseText {
     chunks: Vec<ChunkResponse>,
 }
 
-pub async fn upload_chunks(chunks: Vec<NamedTempFile>) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn upload_chunks(chunks: Vec<NamedTempFile>) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let mut tasks = Vec::new();
     let responses: Arc<Mutex<Vec<ChunkResponse>>> = Arc::new(Mutex::new(Vec::new()));
