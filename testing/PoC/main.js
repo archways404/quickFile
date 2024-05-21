@@ -89,6 +89,7 @@ async function uploadPart(partContent) {
 }
 
 async function main() {
+  console.time('main');
 	const originalFilePath = 'video.mp4';
 	const base64FilePath = 'output/video64.txt';
 	const jsonFilePath = 'output/response.json';
@@ -148,6 +149,7 @@ async function main() {
 
 	fs.writeFileSync(combinedFilePath, decryptedData);
 	console.log(`Combined file decoded and saved to: ${combinedFilePath}`);
+  console.timeEnd('main');
 }
 
 main().catch(console.error);
