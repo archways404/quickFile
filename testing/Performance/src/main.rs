@@ -9,6 +9,7 @@ use reqwest::Client;
 use serde_urlencoded;
 use tokio::runtime::Runtime;
 use futures::future::join_all;
+use std::time::Instant;
 
 const PASSWORD: &str = "your-secure-password";
 const SALT: [u8; 16] = [0; 16]; // Replace with a secure random salt
@@ -76,7 +77,7 @@ async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, 
     let data = PartData {
         lang: "text".to_string(),
         text: part_content.clone(),
-        expire: "-1".to_string(),
+        expire: "10m".to_string(),
         password: "".to_string(),
         title: "".to_string(),
     };
@@ -133,6 +134,8 @@ async fn download_part(client: Arc<Client>, url: String, index: usize, tx: Sende
 }
 
 async fn main_async() {
+    let start = Instant::now();
+
     let original_file_path = "video.mp4";
     let json_file_path = "output/response.json";
     let combined_file_path = "output/new_video.mp4";
@@ -231,7 +234,10 @@ async fn main_async() {
     println!("Combined file decoded and saved to: {}", combined_file_path);
 
     // Clean up output directory
-    //fs::remove_dir_all("output").expect("Failed to remove output directory");
+    fs::remove_dir_all("output").expect("Failed to remove output directory");
+
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 }
 
 fn main() {
