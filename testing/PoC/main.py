@@ -94,11 +94,52 @@ def clear_output_directory(output_directory):
         except Exception as e:
             print(f"Error deleting file {file_path}: {e}")
 
+def download_and_save_parts(json_file_path, output_directory):
+    with open(json_file_path, 'r') as json_file:
+        parts = json.load(json_file)
+    
+    for part in parts:
+        part_name = list(part.keys())[0]
+        part_code = part[part_name]
+        
+        url = f"https://pst.innomi.net/paste/{part_code}"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            code_div = soup.find('div', {'class': 'code', 'id': 'code'})
+            if code_div:
+                part_content = code_div.get_text()
+                part_file_path = os.path.join(output_directory, part_name + '.txt')
+                with open(part_file_path, 'w') as part_file:
+                    part_file.write(part_content)
+                print(f"Saved {part_name} to {part_file_path}")
+        else:
+            print(f"Failed to download {part_name}: {response.status_code}")
+
+def combine_parts_and_decode(output_directory, combined_file_path):
+    part_files = sorted([f for f in os.listdir(output_directory) if f.startswith('part-') and f.endswith('.txt')])
+    
+    combined_content = ""
+    for part_file in part_files:
+        with open(os.path.join(output_directory, part_file), 'r') as file:
+            combined_content += file.read()
+    
+    # Decode the combined base64 content
+    decoded_data = base64.b64decode(combined_content)
+    
+    # Write the decoded data to the combined file
+    with open(combined_file_path, 'wb') as combined_file:
+        combined_file.write(decoded_data)
+    
+    print(f"Combined file saved to: {combined_file_path}")
+
 def main():
     original_file_path = 'video.mp4'  # Replace with your file's path
     base64_file_path = 'output/video64.txt'  # Note the relative path without leading slash
     json_file_path = 'output/response.json'  # Path to save the response JSON file
     output_directory = os.path.dirname(base64_file_path)
+    combined_file_path = 'output/combined_video.mp4'  # Path to save the combined decoded file
     
     # Clear the output directory
     clear_output_directory(output_directory)
@@ -127,6 +168,14 @@ def main():
     
     save_links_to_json(links, json_file_path)
     print(f"All links have been saved to: {json_file_path}")
+
+    # Download and save parts
+    download_and_save_parts(json_file_path, output_directory)
+    print(f"All parts have been downloaded and saved in the output directory.")
+    
+    # Combine parts and decode the file
+    combine_parts_and_decode(output_directory, combined_file_path)
+    print(f"Combined file decoded and saved to: {combined_file_path}")
 
 if __name__ == "__main__":
     main()
