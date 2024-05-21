@@ -13,7 +13,6 @@ use serde::{Serialize, Deserialize};
 use reqwest::Client;
 use serde_urlencoded;
 use tokio::runtime::Runtime;
-use tokio::task;
 use futures::future::join_all;
 use std::time::Instant;
 
@@ -138,12 +137,12 @@ async fn download_part(client: Arc<Client>, url: String, index: usize, tx: Sende
     }
 }
 
-async fn process_single_file(file_path: &str) -> Result<String, String> {
+async fn process_single_file(file_path: String) -> Result<String, String> {
     let start = Instant::now();
-    let file_name = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
+    let file_name = PathBuf::from(&file_path).file_name().unwrap().to_str().unwrap().to_string();
     
     // Read the file content
-    let file_content = fs::read(file_path).map_err(|e| format!("Failed to read file: {}", e.to_string()))?;
+    let file_content = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e.to_string()))?;
 
     // Print the file name and size
     println!("Processing file: {}", file_name);
@@ -259,6 +258,16 @@ async fn process_single_file(file_path: &str) -> Result<String, String> {
     reconstructed_file.write_all(&decrypted_data).map_err(|e| e.to_string())?;
     println!("Reconstructed file saved as {}", reconstructed_file_path.display());
 
+    // Clean up chunk files
+    for entry in fs::read_dir(".").map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() && path.file_name().unwrap().to_str().unwrap().starts_with("chunk_") && path.extension().unwrap() == "txt" {
+            fs::remove_file(path.clone()).map_err(|e| e.to_string())?;
+            println!("Deleted chunk file: {:?}", path);
+        }
+    }
+
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
@@ -267,9 +276,20 @@ async fn process_single_file(file_path: &str) -> Result<String, String> {
 
 #[command]
 async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
-    for file_path in file_paths {
-        process_single_file(&file_path).await?;
+    let tasks: Vec<_> = file_paths.into_iter().map(|file_path| {
+        tokio::spawn(async move {
+            process_single_file(file_path).await
+        })
+    }).collect();
+
+    for task in tasks {
+        match task.await {
+            Ok(Ok(result)) => println!("{}", result),
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(e.to_string()),
+        }
     }
+
     Ok("All files processed successfully".into())
 }
 
