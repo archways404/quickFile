@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{command, Builder, generate_context, generate_handler};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -57,7 +57,7 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
 
     // Save each chunk to the local file system (optional)
     for (i, temp_file) in temp_files.iter().enumerate() {
-        let chunk_path = PathBuf::from(format!("./chunk_{}.txt", i));
+        let chunk_path = PathBuf::from(format!("./chunks/chunk_{}.txt", i));
         let mut chunk_file = File::create(&chunk_path).map_err(|e| e.to_string())?;
         
         let mut temp_file_content = Vec::new();
@@ -83,6 +83,23 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
     // Rebuild the file from the downloaded chunks
     let rebuilt_temp_file = rebuild_file(chunk_files).map_err(|e| format!("Rebuild failed: {}", e.to_string()))?;
     println!("Reconstructed file");
+
+    // Save the reconstructed file with the original extension
+    let extension = PathBuf::from(&file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("tmp")
+        .to_string();
+
+    let reconstructed_file_path = PathBuf::from(format!("reconstructed_file.{}", extension));
+    let mut reconstructed_file = File::create(&reconstructed_file_path).map_err(|e| e.to_string())?;
+
+    let mut rebuilt_content = Vec::new();
+    let mut rebuilt_temp_handle = rebuilt_temp_file.reopen().map_err(|e| e.to_string())?;
+    rebuilt_temp_handle.read_to_end(&mut rebuilt_content).map_err(|e| e.to_string())?;
+    reconstructed_file.write_all(&rebuilt_content).map_err(|e| e.to_string())?;
+
+    println!("Reconstructed file saved as {}", reconstructed_file_path.display());
 
     // Decrypt the file content from the reconstructed file
     let decrypted_temp_file = decrypt_temp(&rebuilt_temp_file)
