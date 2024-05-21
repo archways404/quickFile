@@ -7,25 +7,34 @@ use hex_literal::hex;
 use rand::{thread_rng, Rng};
 use rand::distributions::Standard;
 use rand::RngCore;
+use std::fs::File;
+use std::io::Write;
+use std::error::Error;
+use tempfile::NamedTempFile;
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
 const KEY: [u8; 32] = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 
-pub fn encrypt(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Generate a random initialization vector (IV)
+/// Encrypts the given file content and writes it to a temporary file.
+///
+/// # Arguments
+///
+/// * `file_content` - A vector of bytes representing the file content.
+///
+/// # Returns
+///
+/// * A NamedTempFile handle containing the encrypted data.
+pub fn encrypt_temp(file_content: &[u8]) -> Result<NamedTempFile, Box<dyn Error>> {
     let mut iv = [0u8; 16];
     thread_rng().fill_bytes(&mut iv);
 
-    // Create an AES-256-CBC cipher instance
     let cipher = Aes256Cbc::new_from_slices(&KEY, &iv)?;
 
-    // Encrypt the data
-    let ciphertext = cipher.encrypt_vec(data);
+    let ciphertext = cipher.encrypt_vec(file_content);
 
-    // Prepend IV to the ciphertext for use in decryption
-    let mut encrypted_data = iv.to_vec();
-    encrypted_data.extend_from_slice(&ciphertext);
-
-    Ok(encrypted_data)
+    let mut encrypted_temp_file = NamedTempFile::new()?;
+    encrypted_temp_file.write_all(&iv)?;
+    encrypted_temp_file.write_all(&ciphertext)?;
+    Ok(encrypted_temp_file)
 }
