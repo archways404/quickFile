@@ -13,6 +13,7 @@ use serde::{Serialize, Deserialize};
 use reqwest::Client;
 use serde_urlencoded;
 use tokio::runtime::Runtime;
+use tokio::task;
 use futures::future::join_all;
 use std::time::Instant;
 
@@ -137,12 +138,15 @@ async fn download_part(client: Arc<Client>, url: String, index: usize, tx: Sende
     }
 }
 
-#[command]
-async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String, String> {
+async fn process_single_file(file_path: &str) -> Result<String, String> {
     let start = Instant::now();
+    let file_name = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
     
+    // Read the file content
+    let file_content = fs::read(file_path).map_err(|e| format!("Failed to read file: {}", e.to_string()))?;
+
     // Print the file name and size
-    println!("Received file: {}", file_name);
+    println!("Processing file: {}", file_name);
     println!("File size: {} bytes", file_content.len());
 
     // Base64 encode the file content
@@ -261,10 +265,18 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
     Ok("File processed, encoded, decoded, encrypted, divided into chunks, uploaded, downloaded, rebuilt, and decrypted successfully".into())
 }
 
+#[command]
+async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
+    for file_path in file_paths {
+        process_single_file(&file_path).await?;
+    }
+    Ok("All files processed successfully".into())
+}
+
 fn main() {
     let rt = Runtime::new().unwrap();
     Builder::default()
-        .invoke_handler(generate_handler![process_file])
+        .invoke_handler(generate_handler![process_files])
         .run(generate_context!())
         .expect("error while running tauri application");
 }

@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { invoke } from '@tauri-apps/api/tauri';
+import { open } from '@tauri-apps/api/dialog';
 
 function App() {
 	const [files, setFiles] = useState([]);
@@ -10,7 +11,6 @@ function App() {
 			path: file.path,
 			name: file.name,
 			size: file.size,
-			file, // Store the file object
 		}));
 		setFiles((prevFiles) => [...prevFiles, ...newFiles]);
 	}, []);
@@ -18,25 +18,23 @@ function App() {
 	const { getRootProps, getInputProps } = useDropzone({ onDrop });
 
 	const handleUpload = () => {
-		console.log('Upload button clicked');
-		files.forEach((fileObj) => {
-			const { file } = fileObj;
-			const reader = new FileReader();
+		const filePaths = files.map((file) => file.path);
+		console.log(filePaths); // Log file paths to verify
+		invoke('process_files', { filePaths })
+			.then((response) => console.log(response))
+			.catch((error) => console.error(error));
+	};
 
-			reader.onload = () => {
-				const binaryStr = reader.result;
-				console.log(`Sending file: ${file.name}, size: ${file.size} bytes`);
-				// Send the file content to the backend
-				invoke('process_file', {
-					fileName: file.name,
-					fileContent: Array.from(new Uint8Array(binaryStr)),
-				})
-					.then((response) => console.log(response))
-					.catch((error) => console.error(error));
-			};
-
-			reader.readAsArrayBuffer(file);
-		});
+	const handleSelectFiles = async () => {
+		const selectedFiles = await open({ multiple: true });
+		if (Array.isArray(selectedFiles)) {
+			const newFiles = selectedFiles.map((filePath) => ({
+				path: filePath,
+				name: filePath.split('/').pop(), // Extract the file name
+				size: 0, // Optionally, you can fetch the file size
+			}));
+			setFiles((prevFiles) => [...prevFiles, ...newFiles]);
+		}
 	};
 
 	return (
@@ -52,12 +50,18 @@ function App() {
 				<input {...getInputProps()} />
 				<p>Drag & drop a file here, or click to select a file</p>
 			</div>
+			<button onClick={handleSelectFiles}>Select Files</button>
 			<div>
 				<h2>Selected Files</h2>
 				<ul>
 					{files.map((file, index) => (
 						<li key={index}>
-							{file.name} - {(file.size / 1024).toFixed(2)} KB
+							{file.name} -{' '}
+							{file.size
+								? (file.size / 1024).toFixed(2) + ' KB'
+								: 'Size not available'}
+							<br />
+							Full Path: {file.path}
 						</li>
 					))}
 				</ul>
