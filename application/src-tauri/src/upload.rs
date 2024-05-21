@@ -1,5 +1,3 @@
-// src/upload.rs
-
 use reqwest::Client;
 use serde::Serialize;
 use std::error::Error;
@@ -10,7 +8,7 @@ use tempfile::NamedTempFile;
 use tokio::task;
 use tokio::sync::Mutex;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ChunkResponse {
     index: usize,
     link: String,
@@ -21,7 +19,7 @@ struct ResponseText {
     chunks: Vec<ChunkResponse>,
 }
 
-pub async fn upload_chunks(chunks: Vec<NamedTempFile>) -> Result<(), Box<dyn Error>> {
+pub async fn upload_chunks(chunks: Vec<NamedTempFile>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let client = Client::new();
     let mut tasks = Vec::new();
     let responses: Arc<Mutex<Vec<ChunkResponse>>> = Arc::new(Mutex::new(Vec::new()));
