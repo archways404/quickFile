@@ -140,6 +140,12 @@ async fn main_async() {
     let json_file_path = "output/response.json";
     let combined_file_path = "output/new_video.mp4";
 
+    /*
+    let original_file_path = "img.jpg";
+    let json_file_path = "output/response.json";
+    let combined_file_path = "output/new_img.jpg";
+    */
+
     // Clear output directory
     fs::remove_dir_all("output").unwrap_or(());
     fs::create_dir_all("output/parts").expect("Failed to create parts directory");
