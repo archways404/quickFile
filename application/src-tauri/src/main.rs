@@ -52,7 +52,7 @@ fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String, Stri
 
     // Save each chunk to the local file system
     for (i, temp_file) in temp_files.iter().enumerate() {
-        let chunk_path = PathBuf::from(format!("./{}_chunk_{}.enc", file_name, i));
+        let chunk_path = PathBuf::from(format!("./chunk_{}.txt", i));
         let mut chunk_file = File::create(&chunk_path).map_err(|e| e.to_string())?;
         
         let mut temp_file_content = Vec::new();
