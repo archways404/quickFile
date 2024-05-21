@@ -4,14 +4,16 @@ use tauri::{command, Builder, generate_context, generate_handler};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
-// Include the encode, decode, encrypt, decrypt, chunks, and upload modules
+// Include the encode, decode, encrypt, decrypt, chunks, upload, and download modules
 mod encode;
 mod decode;
 mod encrypt;
 mod decrypt;
 mod chunks;
 mod upload;
+mod download;
 
 use encode::encode_to_base64_temp;
 use decode::decode_from_base64_temp;
@@ -19,6 +21,7 @@ use encrypt::encrypt_temp;
 use decrypt::decrypt_temp;
 use chunks::split_into_temp_files;
 use upload::upload_chunks;
+use download::{download_files, rebuild_file, ResponseText};
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
 
@@ -69,8 +72,20 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
     upload_chunks(temp_files).await.map_err(|e| format!("Upload failed: {}", e.to_string()))?;
     println!("Chunks uploaded successfully");
 
-    // Decrypt the file content from the temporary file for testing purposes
-    let decrypted_temp_file = decrypt_temp(&encrypted_temp_file)
+    // Read the response_text.json file
+    let file = File::open("response_text.json").map_err(|e| e.to_string())?;
+    let response_text: ResponseText = serde_json::from_reader(file).map_err(|e| e.to_string())?;
+
+    // Download the chunks
+    let chunk_files = download_files(response_text.chunks).await.map_err(|e| format!("Download failed: {}", e.to_string()))?;
+    println!("Chunks downloaded successfully");
+
+    // Rebuild the file from the downloaded chunks
+    let rebuilt_temp_file = rebuild_file(chunk_files).map_err(|e| format!("Rebuild failed: {}", e.to_string()))?;
+    println!("Reconstructed file");
+
+    // Decrypt the file content from the reconstructed file
+    let decrypted_temp_file = decrypt_temp(&rebuilt_temp_file)
         .map_err(|e| format!("Decryption failed: {}", e.to_string()))?;
     println!("Decrypted Content written to temp file");
 
@@ -80,7 +95,7 @@ async fn process_file(file_name: String, file_content: Vec<u8>) -> Result<String
     decrypted_temp_handle.read_to_end(&mut decrypted_content).map_err(|e| e.to_string())?;
     println!("Decrypted Content matches original: {}", decrypted_content == file_content);
 
-    Ok("File processed, encoded, decoded, encrypted, divided into chunks, uploaded, and decrypted successfully".into())
+    Ok("File processed, encoded, decoded, encrypted, divided into chunks, uploaded, downloaded, rebuilt, and decrypted successfully".into())
 }
 
 fn main() {
