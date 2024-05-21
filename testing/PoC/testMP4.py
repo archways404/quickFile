@@ -1,14 +1,12 @@
 import base64
 import os
-import requests
-import json
 import zlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from bs4 import BeautifulSoup
 
+# Calculate the CRC32 checksum of the data
 def calculate_crc32(data):
     return zlib.crc32(data) & 0xffffffff
 
+# Convert the original file to a base64-encoded string and save it
 def convert_file_to_base64(original_file_path, base64_file_path):
     output_directory = os.path.dirname(base64_file_path)
     if not os.path.exists(output_directory):
@@ -26,6 +24,7 @@ def convert_file_to_base64(original_file_path, base64_file_path):
     print(f"Original CRC32: {original_crc32}")
     return original_crc32, len(base64_encoded_data)
 
+# Split the base64-encoded file into parts of 5MB each
 def split_file_to_parts(base64_file_path, part_size_mb=5):
     part_size = part_size_mb * 1024 * 1024
     output_directory = os.path.dirname(base64_file_path)
@@ -50,70 +49,7 @@ def split_file_to_parts(base64_file_path, part_size_mb=5):
     
     return part_files
 
-def upload_part(file_path):
-    with open(file_path, 'r') as file:
-        part_content = file.read().replace('\n', '')  # Ensure no newlines in part content
-    
-    data = {
-        'lang': 'text',
-        'text': part_content,
-        'expire': '-1',
-        'password': '',
-        'title': ''
-    }
-    
-    response = requests.post('https://pst.innomi.net/paste/new', data=data)
-    
-    print(f"Request to https://pst.innomi.net/paste/new with part content of length {len(part_content)}")
-    print(f"Response Status Code: {response.status_code}")
-    
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        title_tag = soup.find('title')
-        if title_tag:
-            title = title_tag.get_text().split(" - ")[0]
-            return title
-    else:
-        print(f"Failed to upload {file_path}: {response.status_code}")
-    return None
-
-def save_links_to_json(links, json_file_path):
-    formatted_links = [{"part-{}".format(i + 1): link} for i, link in enumerate(links)]
-    with open(json_file_path, 'w') as json_file:
-        json.dump(formatted_links, json_file, indent=4)
-
-def clear_output_directory(output_directory):
-    for file_name in os.listdir(output_directory):
-        file_path = os.path.join(output_directory, file_name)
-        try:
-            if os.path.isfile(file_path):
-                os.unlink(file_path)
-        except Exception as e:
-            print(f"Error deleting file {file_path}: {e}")
-
-def download_and_save_parts(json_file_path, output_directory):
-    with open(json_file_path, 'r') as json_file:
-        parts = json.load(json_file)
-    
-    for part in parts:
-        part_name = list(part.keys())[0]
-        part_code = part[part_name]
-        
-        url = f"https://pst.innomi.net/paste/{part_code}"
-        response = requests.get(url)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            code_div = soup.find('div', {'class': 'code', 'id': 'code'})
-            if code_div:
-                part_content = code_div.get_text().replace('\n', '')  # Ensure no newlines in part content
-                part_file_path = os.path.join(output_directory, part_name + '.txt')
-                with open(part_file_path, 'w') as part_file:
-                    part_file.write(part_content)
-                print(f"Saved {part_name} to {part_file_path} with length {len(part_content)}")
-        else:
-            print(f"Failed to download {part_name}: {response.status_code}")
-
+# Combine the parts back into the full base64-encoded string and decode it
 def combine_parts_and_decode(output_directory, combined_file_path, original_crc32, original_base64_length):
     part_files = sorted(
         [f for f in os.listdir(output_directory) if f.startswith('part-') and f.endswith('.txt')],
@@ -151,6 +87,7 @@ def combine_parts_and_decode(output_directory, combined_file_path, original_crc3
     
     print(f"Combined file saved to: {combined_file_path}")
 
+# Validate the base64-encoded file to ensure it can be decoded correctly
 def validate_base64(base64_file_path):
     with open(base64_file_path, 'r') as base64_file:
         base64_content = base64_file.read().replace('\n', '')  # Ensure no newlines in base64 content
@@ -161,21 +98,21 @@ def validate_base64(base64_file_path):
         return False
     return True
 
-def main():
-    """
-    original_file_path = 'video.mp4'
-    base64_file_path = 'output/video64.txt'
-    json_file_path = 'output/response.json'
-    output_directory = os.path.dirname(base64_file_path)
-    combined_file_path = 'output/new_video.mp4'
-    """
+# Clear the output directory to ensure a clean working space
+def clear_output_directory(output_directory):
+    for file_name in os.listdir(output_directory):
+        file_path = os.path.join(output_directory, file_name)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(f"Error deleting file {file_path}: {e}")
 
-    original_file_path = 'img.jpg'
-    base64_file_path = 'output/img64.txt'
-    json_file_path = 'output/response.json'
-    output_directory = os.path.dirname(base64_file_path)
-    combined_file_path = 'output/new_img.jpg'
-    
+def main():
+    original_file_path = 'video.mp4'  # Replace with your file's path
+    base64_file_path = 'output/video64.txt'  # Path to save the base64-encoded file
+    output_directory = os.path.dirname(base64_file_path)  # Directory to save parts and combined file
+    combined_file_path = 'output/new_video.mp4'  # Path to save the combined file
 
     clear_output_directory(output_directory)
     
@@ -189,25 +126,6 @@ def main():
     part_files = split_file_to_parts(base64_file_path, part_size_mb=5)
     print(f"Base64-encoded file split into 5MB parts and saved in the output directory.")
     print(f"The original base64-encoded file has been removed.")
-    
-    links = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for part_file in part_files:
-            futures.append(executor.submit(upload_part, part_file))
-        
-        for future in as_completed(futures):
-            link = future.result()
-            if link:
-                links.append(link)
-    
-    clear_output_directory(output_directory)
-    
-    save_links_to_json(links, json_file_path)
-    print(f"All links have been saved to: {json_file_path}")
-
-    download_and_save_parts(json_file_path, output_directory)
-    print(f"All parts have been downloaded and saved in the output directory.")
     
     combine_parts_and_decode(output_directory, combined_file_path, original_crc32, original_base64_length)
     print(f"Combined file decoded and saved to: {combined_file_path}")
