@@ -131,8 +131,6 @@ fn split_into_temp_files(data: &[u8], chunk_size: usize) -> Result<Vec<(PathBuf,
 }
 
 async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>, String> {
-    let file_name = PathBuf::from(&file_path).file_name().unwrap().to_str().unwrap().to_string();
-
     // Read the file content
     let file_content = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e.to_string()))?;
 
@@ -166,7 +164,7 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
     join_all(handles).await;
 
     let mut links: Vec<(usize, String)> = vec![];
-    println!("Received links:" );
+    println!("Received links:");
     for _ in 0..temp_files.len() {
         if let Ok(link) = rx.recv() {
             links.push(link);
@@ -178,10 +176,38 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
         serde_json::json!({ part_name: link })
     }).collect();
 
-    let response_json = serde_json::to_string_pretty(&formatted_links).unwrap();
-    fs::write(format!("{}_response.json", file_name), &response_json).expect("Failed to save links to file");
-
     Ok(formatted_links)
+}
+
+async fn upload_response_text() -> Result<String, String> {
+    let client = Client::new();
+    let file_content = fs::read_to_string("response_text.json").map_err(|e| e.to_string())?;
+    let data = PartData {
+        lang: "text".to_string(),
+        text: file_content,
+        expire: "10m".to_string(),
+        password: "".to_string(),
+        title: "".to_string(),
+    };
+    let res = client.post("https://pst.innomi.net/paste/new")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(serde_urlencoded::to_string(&data).unwrap())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if res.status().is_success() {
+        if let Some(title) = res.text().await.ok()
+            .and_then(|body| {
+                body.split("<title>").nth(1)
+                    .and_then(|body| body.split("</title>").next())
+                    .map(|title| title.split(" - ").next().unwrap_or("").to_string())
+            }) {
+            return Ok(title);
+        }
+    }
+
+    Err("Failed to upload response_text.json or parse the title".into())
 }
 
 async fn upload_file_data_json() -> Result<String, String> {
@@ -325,36 +351,35 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
 
 #[command]
 async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
-    let mut titles = vec![];
+    let mut all_titles: Vec<serde_json::Value> = vec![];
     let file_names: Vec<String> = file_paths.iter().map(|path| {
         PathBuf::from(path).file_name().unwrap().to_str().unwrap().to_string()
     }).collect();
 
-    let tasks: Vec<_> = file_paths.into_iter().map(|file_path| {
-        tokio::spawn(async move {
-            process_single_file(file_path).await
-        })
-    }).collect();
-
-    for task in tasks {
-        match task.await {
-            Ok(Ok(links)) => {
+    for file_path in file_paths {
+        // Process each file separately
+        match process_single_file(file_path.clone()).await {
+            Ok(links) => {
+                // Save parts to response_text.json
                 let response_json = serde_json::to_string_pretty(&links).unwrap();
-                let title = fs::write("response_text.json", &response_json).expect("Failed to save response_text.json");
-                titles.push(title);
+                fs::write("response_text.json", &response_json).expect("Failed to save response_text.json");
+
+                // Upload response_text.json and get its title
+                let response_text_title = upload_response_text().await?;
+                all_titles.push(serde_json::json!({"title": response_text_title}));
+
+                // Clear response_text.json for the next file
+                fs::write("response_text.json", "[]").expect("Failed to clear response_text.json");
             },
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e),
         }
     }
 
-    println!("Titles: {:?}", titles);
-
-    let title_json_array: Vec<_> = titles.into_iter().map(|title| serde_json::json!({"title": title})).collect();
-    let file_data_json = serde_json::to_string_pretty(&title_json_array).unwrap();
+    // Save all titles to file_data.json
+    let file_data_json = serde_json::to_string_pretty(&all_titles).unwrap();
     fs::write("file_data.json", &file_data_json).expect("Failed to save file_data.json");
 
-    // Upload file_data.json and log the title
+    // Upload file_data.json and get its title
     let file_data_title = upload_file_data_json().await?;
     println!("file_data.json Response Title: {}", file_data_title);
 
