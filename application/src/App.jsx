@@ -5,6 +5,8 @@ import { open } from '@tauri-apps/api/dialog';
 
 function App() {
 	const [files, setFiles] = useState([]);
+	const [responseTitle, setResponseTitle] = useState('');
+	const [rebuildTitle, setRebuildTitle] = useState('');
 
 	const onDrop = useCallback((acceptedFiles) => {
 		const newFiles = acceptedFiles.map((file) => ({
@@ -21,7 +23,10 @@ function App() {
 		const filePaths = files.map((file) => file.path);
 		console.log(filePaths); // Log file paths to verify
 		invoke('process_files', { filePaths })
-			.then((response) => console.log(response))
+			.then((response) => {
+				console.log(response);
+				setResponseTitle(response);
+			})
 			.catch((error) => console.error(error));
 	};
 
@@ -35,6 +40,14 @@ function App() {
 			}));
 			setFiles((prevFiles) => [...prevFiles, ...newFiles]);
 		}
+	};
+
+	const handleRebuild = () => {
+		invoke('rebuild_files', { title: rebuildTitle })
+			.then(() => {
+				console.log(`Rebuilding files for title: ${rebuildTitle}`);
+			})
+			.catch((error) => console.error(error));
 	};
 
 	return (
@@ -71,6 +84,22 @@ function App() {
 				style={{ marginTop: '20px', padding: '10px 20px' }}>
 				Upload Files
 			</button>
+			{responseTitle && (
+				<div>
+					<h2>Response Title</h2>
+					<p>{responseTitle}</p>
+				</div>
+			)}
+			<div style={{ marginTop: '20px' }}>
+				<h2>Rebuild Files</h2>
+				<input
+					type="text"
+					value={rebuildTitle}
+					onChange={(e) => setRebuildTitle(e.target.value)}
+					placeholder="Enter response title"
+				/>
+				<button onClick={handleRebuild}>Rebuild Files</button>
+			</div>
 		</div>
 	);
 }

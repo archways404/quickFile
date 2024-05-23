@@ -1,0 +1,12 @@
+in rust, how can I split this up so that it's two "tauri endpoints" or whatever, that convert the files to base64, encrypt it, split it up and uploads it, and then 
+
+
+"-1" = forever
+
+"10m" = 10 minutes
+
+"1h" = 1 hour
+
+"1d" = 1 day
+
+"14d" = 14 days (2 weeks)
