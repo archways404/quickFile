@@ -58,18 +58,67 @@ fn encrypt(data: &[u8], key: &[u8]) -> String {
     encrypted.truncate(count);
     let mut result = iv.to_vec();
     result.extend_from_slice(&encrypted);
-    encode(&result)
+    encode(&result) // Base64 encode the final encrypted result
 }
 
-fn decrypt(encrypted_data: &str, key: &[u8]) -> Vec<u8> {
-    let data = decode(encrypted_data).unwrap();
+fn decrypt(encrypted_data: &str, key: &[u8]) -> Result<Vec<u8>, String> {
+    println!("Decrypting data...");
+
+    // Base64 decode the encrypted data
+    let data = match decode(encrypted_data) {
+        Ok(data) => data,
+        Err(e) => {
+            println!("Base64 decode error: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    println!("Base64 decoded data length: {}", data.len());
+
+    // Split the IV and encrypted text
     let (iv, encrypted_text) = data.split_at(16);
-    let mut crypter = Crypter::new(Cipher::aes_256_cbc(), Mode::Decrypt, key, Some(iv)).unwrap();
+    let mut crypter = match Crypter::new(Cipher::aes_256_cbc(), Mode::Decrypt, key, Some(iv)) {
+        Ok(crypter) => crypter,
+        Err(e) => {
+            println!("Crypter creation error: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    // Prepare buffer for decrypted data
     let mut decrypted = vec![0; encrypted_text.len() + Cipher::aes_256_cbc().block_size()];
-    let mut count = crypter.update(encrypted_text, &mut decrypted).unwrap();
-    count += crypter.finalize(&mut decrypted[count..]).unwrap();
+
+    // Decrypt the data
+    let mut count = match crypter.update(encrypted_text, &mut decrypted) {
+        Ok(count) => count,
+        Err(e) => {
+            println!("Update error: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    // Finalize the decryption
+    count += match crypter.finalize(&mut decrypted[count..]) {
+        Ok(count) => count,
+        Err(e) => {
+            println!("Finalize error: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    // Truncate to the actual size of the decrypted data
     decrypted.truncate(count);
-    decrypted
+
+    println!("Decrypted data length: {}", decrypted.len());
+
+    // The decrypted data should be base64 decoded again to get the original content
+    match decode(&String::from_utf8(decrypted).unwrap()) {
+        Ok(data) => Ok(data),
+        Err(e) => {
+            println!("Final Base64 decode error: {}", e);
+            Err(e.to_string())
+        }
+    }
 }
 
 async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, String)>, index: usize) {
@@ -143,11 +192,10 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
 
     // Encrypt the base64 encoded content
     let key = derive_key(PASSWORD, &SALT);
-    let encrypted_data = encrypt(&base64_encoded_data.as_bytes(), &key);
+    let encrypted_data = encrypt(base64_encoded_data.as_bytes(), &key);
 
     // Split the encrypted content into 1MB chunks and write to temporary files
-    let encrypted_bytes = encrypted_data.as_bytes();
-    let temp_files = split_into_temp_files(&encrypted_bytes, CHUNK_SIZE)
+    let temp_files = split_into_temp_files(encrypted_data.as_bytes(), CHUNK_SIZE)
         .map_err(|e| format!("Splitting into temp files failed: {}", e.to_string()))?;
 
     // Upload the chunks
@@ -183,6 +231,7 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
     let filename = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
     Ok((filename, formatted_links))
 }
+
 
 async fn upload_response_text() -> Result<String, String> {
     let client = Client::new();
@@ -291,13 +340,22 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
 }
 
 async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8>, tx: Sender<(usize, Vec<u8>)>, index: usize) {
+    println!("Downloading part from link: {}", url);
+
     if let Ok(response) = client.get(&url).send().await {
         if let Ok(body) = response.text().await {
             if let Some(code_div_content) = body.split(r#"<div class="code" id="code">"#).nth(1)
                 .and_then(|body| body.split("</div>").next()) {
-                    let decrypted_data = decrypt(&decode_html_entities(&code_div_content), &key);
-                    tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
-                    println!("Downloaded part from link: {}", url);
+                    let decoded_content = decode_html_entities(&code_div_content).to_string();
+                    match decrypt(&decoded_content, &key) {
+                        Ok(decrypted_data) => {
+                            tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
+                            println!("Downloaded and decrypted part from link: {}", url);
+                        }
+                        Err(e) => {
+                            println!("Failed to decrypt part from link: {}: {}", url, e);
+                        }
+                    }
             } else {
                 println!("Failed to parse part content from link: {}", url);
             }
@@ -317,7 +375,7 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     println!("Initial JSON: {}", initial_json);
 
     let files: HashMap<String, Vec<HashMap<String, String>>> = serde_json::from_str(&initial_json).map_err(|e| {
-        println!("Failed to parse JSON from {}: {}", initial_url, e); // Log parsing error
+        println!("Failed to parse JSON from {}: {}", initial_url, e);
         e.to_string()
     })?;
 
@@ -360,6 +418,7 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
 
     Ok(())
 }
+
 
 #[command]
 async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
