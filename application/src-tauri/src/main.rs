@@ -321,7 +321,6 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     for file in files {
         let file_url = format!("https://pst.innomi.net/paste/{}", file.title);
         let file_json = download_json(Arc::clone(&client), &file_url).await?;
-        println!("File JSON: {}", file_json);
 
         let parts: Vec<FileEntry> = serde_json::from_str(&file_json).map_err(|e| {
             println!("Failed to parse JSON from {}: {}", file_url, e); // Log parsing error
