@@ -165,7 +165,6 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
     join_all(handles).await;
 
     let mut links: Vec<(usize, String)> = vec![];
-    println!("Received links:");
     for _ in 0..temp_files.len() {
         if let Ok(link) = rx.recv() {
             links.push(link);
@@ -272,8 +271,10 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
         if let Some(code_div_content) = text.split(r#"<div class="code" id="code">"#).nth(1)
             .and_then(|body| body.split("</div>").next()) {
             // Decode HTML entities
-            let decoded_content = html_escape::decode_html_entities(code_div_content);
-            return Ok(decoded_content.to_string());
+            let decoded_content = html_escape::decode_html_entities(&code_div_content);
+            // Clean and format JSON
+            let cleaned_content = decoded_content.replace("&#34;", "\"").replace("\n", "").trim().to_string();
+            return Ok(cleaned_content);
         } else {
             println!("Failed to find <div class=\"code\" id=\"code\"> in the HTML from {}", url);
             return Err("Failed to extract JSON from HTML".to_string());
@@ -289,7 +290,7 @@ async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8
         if let Ok(body) = response.text().await {
             if let Some(code_div_content) = body.split(r#"<div class="code" id="code">"#).nth(1)
                 .and_then(|body| body.split("</div>").next()) {
-                    let decrypted_data = decrypt(code_div_content, &key);
+                    let decrypted_data = decrypt(&html_escape::decode_html_entities(&code_div_content), &key);
                     tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
                     println!("Downloaded part from link: {}", url);
             } else {
@@ -308,6 +309,8 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     let initial_url = format!("https://pst.innomi.net/paste/{}", title);
     let initial_json = download_json(Arc::clone(&client), &initial_url).await?;
 
+    println!("Initial JSON: {}", initial_json);
+
     let files: Vec<FilePart> = serde_json::from_str(&initial_json).map_err(|e| {
         println!("Failed to parse JSON from {}: {}", initial_url, e); // Log parsing error
         e.to_string()
@@ -318,6 +321,7 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     for file in files {
         let file_url = format!("https://pst.innomi.net/paste/{}", file.title);
         let file_json = download_json(Arc::clone(&client), &file_url).await?;
+        println!("File JSON: {}", file_json);
 
         let parts: Vec<FileEntry> = serde_json::from_str(&file_json).map_err(|e| {
             println!("Failed to parse JSON from {}: {}", file_url, e); // Log parsing error
