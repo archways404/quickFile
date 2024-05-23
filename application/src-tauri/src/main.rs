@@ -14,6 +14,7 @@ use tokio::runtime::Runtime;
 use futures::future::join_all;
 use tempfile::NamedTempFile;
 use dirs;
+use html_escape;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
 const PASSWORD: &str = "your-secure-password";
@@ -265,10 +266,20 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
     let res = client.get(url).send().await.map_err(|e| e.to_string())?;
     if res.status().is_success() {
         let text = res.text().await.map_err(|e| e.to_string())?;
-        println!("Downloaded JSON from {}: {}", url, text); // Log the JSON response
-        Ok(text)
+        println!("Downloaded HTML from {}: {}", url, text); // Log the HTML response
+
+        // Extract JSON from <div class="code" id="code">
+        if let Some(code_div_content) = text.split(r#"<div class="code" id="code">"#).nth(1)
+            .and_then(|body| body.split("</div>").next()) {
+            // Decode HTML entities
+            let decoded_content = html_escape::decode_html_entities(code_div_content);
+            return Ok(decoded_content.to_string());
+        } else {
+            println!("Failed to find <div class=\"code\" id=\"code\"> in the HTML from {}", url);
+            return Err("Failed to extract JSON from HTML".to_string());
+        }
     } else {
-        println!("Failed to download JSON from {}: {}", url, res.status()); // Log the error
+        println!("Failed to download HTML from {}: {}", url, res.status()); // Log the error
         Err("Failed to download JSON".to_string())
     }
 }
