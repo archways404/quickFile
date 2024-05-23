@@ -37,8 +37,6 @@ struct PartLink {
     part: String,
 }
 
-type FileEntry = HashMap<String, String>;
-
 async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, String)>, index: usize) {
     let part_content = match fs::read_to_string(&part_path) {
         Ok(content) => content,
@@ -50,7 +48,7 @@ async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, 
     let data = PartData {
         lang: "text".to_string(),
         text: part_content.clone(),
-        expire: "10m".to_string(),
+        expire: "1h".to_string(),
         password: "".to_string(),
         title: "".to_string(),
     };
@@ -144,37 +142,6 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
 
     let filename = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
     Ok((filename, formatted_links))
-}
-
-async fn upload_response_text() -> Result<String, String> {
-    let client = Client::new();
-    let file_content = fs::read_to_string("response_text.json").map_err(|e| e.to_string())?;
-    let data = PartData {
-        lang: "text".to_string(),
-        text: file_content,
-        expire: "10m".to_string(),
-        password: "".to_string(),
-        title: "".to_string(),
-    };
-    let res = client.post("https://pst.innomi.net/paste/new")
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(serde_urlencoded::to_string(&data).unwrap())
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if res.status().is_success() {
-        if let Some(title) = res.text().await.ok()
-            .and_then(|body| {
-                body.split("<title>").nth(1)
-                    .and_then(|body| body.split("</title>").next())
-                    .map(|title| title.split(" - ").next().unwrap_or("").to_string())
-            }) {
-            return Ok(title);
-        }
-    }
-
-    Err("Failed to upload response_text.json or parse the title".into())
 }
 
 async fn upload_file_data_json() -> Result<String, String> {
