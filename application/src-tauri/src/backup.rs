@@ -130,7 +130,10 @@ fn split_into_temp_files(data: &[u8], chunk_size: usize) -> Result<Vec<(PathBuf,
     Ok(temp_files)
 }
 
-async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>, String> {
+
+
+/*
+async fn process_single_file(file_path: String) -> Result<String, String> {
     let file_name = PathBuf::from(&file_path).file_name().unwrap().to_str().unwrap().to_string();
 
     // Read the file content
@@ -166,7 +169,6 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
     join_all(handles).await;
 
     let mut links: Vec<(usize, String)> = vec![];
-    println!("Received links:" );
     for _ in 0..temp_files.len() {
         if let Ok(link) = rx.recv() {
             links.push(link);
@@ -181,8 +183,9 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
     let response_json = serde_json::to_string_pretty(&formatted_links).unwrap();
     fs::write(format!("{}_response.json", file_name), &response_json).expect("Failed to save links to file");
 
-    Ok(formatted_links)
+    Ok(file_name)
 }
+*/
 
 async fn upload_file_data_json() -> Result<String, String> {
     let client = Client::new();
@@ -338,17 +341,14 @@ async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
 
     for task in tasks {
         match task.await {
-            Ok(Ok(links)) => {
-                let response_json = serde_json::to_string_pretty(&links).unwrap();
-                let title = fs::write("response_text.json", &response_json).expect("Failed to save response_text.json");
-                titles.push(title);
+            Ok(Ok(result)) => {
+                println!("{}", result);
+                titles.push(result);
             },
             Ok(Err(e)) => return Err(e),
             Err(e) => return Err(e.to_string()),
         }
     }
-
-    println!("Titles: {:?}", titles);
 
     let title_json_array: Vec<_> = titles.into_iter().map(|title| serde_json::json!({"title": title})).collect();
     let file_data_json = serde_json::to_string_pretty(&title_json_array).unwrap();
