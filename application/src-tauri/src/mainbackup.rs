@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc::{channel, Sender, Receiver}};
+use openssl::symm::{Cipher, Crypter, Mode};
 use base64::{encode, decode};
 use serde::{Serialize, Deserialize};
 use reqwest::Client;
@@ -17,6 +18,8 @@ use dirs;
 use html_escape::decode_html_entities;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
+const PASSWORD: &str = "your-secure-password";
+const SALT: [u8; 16] = [0; 16]; // Replace with a secure random salt
 
 #[derive(Serialize, Deserialize)]
 struct PartData {
@@ -32,9 +35,36 @@ struct FilePart {
     title: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct PartLink {
-    part: String,
+type FileEntry = HashMap<String, String>;
+
+fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
+    let mut key = vec![0u8; 32];
+    openssl::pkcs5::pbkdf2_hmac(password.as_bytes(), salt, 100_000, openssl::hash::MessageDigest::sha256(), &mut key).unwrap();
+    key
+}
+
+fn encrypt(data: &[u8], key: &[u8]) -> String {
+    let mut iv = vec![0; 16];
+    openssl::rand::rand_bytes(&mut iv).unwrap();
+    let mut crypter = Crypter::new(Cipher::aes_256_cbc(), Mode::Encrypt, key, Some(&iv)).unwrap();
+    let mut encrypted = vec![0; data.len() + Cipher::aes_256_cbc().block_size()];
+    let mut count = crypter.update(data, &mut encrypted).unwrap();
+    count += crypter.finalize(&mut encrypted[count..]).unwrap();
+    encrypted.truncate(count);
+    let mut result = iv.to_vec();
+    result.extend_from_slice(&encrypted);
+    encode(&result)
+}
+
+fn decrypt(encrypted_data: &str, key: &[u8]) -> Vec<u8> {
+    let data = decode(encrypted_data).unwrap();
+    let (iv, encrypted_text) = data.split_at(16);
+    let mut crypter = Crypter::new(Cipher::aes_256_cbc(), Mode::Decrypt, key, Some(iv)).unwrap();
+    let mut decrypted = vec![0; encrypted_text.len() + Cipher::aes_256_cbc().block_size()];
+    let mut count = crypter.update(encrypted_text, &mut decrypted).unwrap();
+    count += crypter.finalize(&mut decrypted[count..]).unwrap();
+    decrypted.truncate(count);
+    decrypted
 }
 
 async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, String)>, index: usize) {
@@ -48,7 +78,7 @@ async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, 
     let data = PartData {
         lang: "text".to_string(),
         text: part_content.clone(),
-        expire: "1h".to_string(),
+        expire: "10m".to_string(),
         password: "".to_string(),
         title: "".to_string(),
     };
@@ -99,15 +129,20 @@ fn split_into_temp_files(data: &[u8], chunk_size: usize) -> Result<Vec<(PathBuf,
     Ok(temp_files)
 }
 
-async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_json::Value>), String> {
+async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>, String> {
     // Read the file content
     let file_content = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e.to_string()))?;
 
     // Base64 encode the file content
     let base64_encoded_data = encode(&file_content);
 
-    // Split the base64 encoded content into 1MB chunks and write to temporary files
-    let temp_files = split_into_temp_files(base64_encoded_data.as_bytes(), CHUNK_SIZE)
+    // Encrypt the base64 encoded content
+    let key = derive_key(PASSWORD, &SALT);
+    let encrypted_data = encrypt(&base64_encoded_data.as_bytes(), &key);
+
+    // Split the encrypted content into 1MB chunks and write to temporary files
+    let encrypted_bytes = encrypted_data.as_bytes();
+    let temp_files = split_into_temp_files(&encrypted_bytes, CHUNK_SIZE)
         .map_err(|e| format!("Splitting into temp files failed: {}", e.to_string()))?;
 
     // Upload the chunks
@@ -140,8 +175,38 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
         serde_json::json!({ part_name: link })
     }).collect();
 
-    let filename = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
-    Ok((filename, formatted_links))
+    Ok(formatted_links)
+}
+
+async fn upload_response_text() -> Result<String, String> {
+    let client = Client::new();
+    let file_content = fs::read_to_string("response_text.json").map_err(|e| e.to_string())?;
+    let data = PartData {
+        lang: "text".to_string(),
+        text: file_content,
+        expire: "10m".to_string(),
+        password: "".to_string(),
+        title: "".to_string(),
+    };
+    let res = client.post("https://pst.innomi.net/paste/new")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(serde_urlencoded::to_string(&data).unwrap())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if res.status().is_success() {
+        if let Some(title) = res.text().await.ok()
+            .and_then(|body| {
+                body.split("<title>").nth(1)
+                    .and_then(|body| body.split("</title>").next())
+                    .map(|title| title.split(" - ").next().unwrap_or("").to_string())
+            }) {
+            return Ok(title);
+        }
+    }
+
+    Err("Failed to upload response_text.json or parse the title".into())
 }
 
 async fn upload_file_data_json() -> Result<String, String> {
@@ -219,20 +284,14 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
     }
 }
 
-async fn download_and_rebuild_part(client: Arc<Client>, url: String, tx: Sender<(usize, Vec<u8>)>, index: usize) {
-    println!("Downloading part from link: {}", url);
-
+async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8>, tx: Sender<(usize, Vec<u8>)>, index: usize) {
     if let Ok(response) = client.get(&url).send().await {
         if let Ok(body) = response.text().await {
             if let Some(code_div_content) = body.split(r#"<div class="code" id="code">"#).nth(1)
                 .and_then(|body| body.split("</div>").next()) {
-                    let decoded_content = decode_html_entities(&code_div_content).to_string();
-                    if let Ok(decoded_data) = decode(&decoded_content) {
-                        tx.send((index, decoded_data)).expect("Failed to send downloaded part");
-                        println!("Downloaded part from link: {}", url);
-                    } else {
-                        println!("Failed to decode part content from link: {}", url);
-                    }
+                    let decrypted_data = decrypt(&decode_html_entities(&code_div_content), &key);
+                    tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
+                    println!("Downloaded part from link: {}", url);
             } else {
                 println!("Failed to parse part content from link: {}", url);
             }
@@ -251,23 +310,36 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
 
     println!("Initial JSON: {}", initial_json);
 
-    let files: HashMap<String, Vec<HashMap<String, String>>> = serde_json::from_str(&initial_json).map_err(|e| {
-        println!("Failed to parse JSON from {}: {}", initial_url, e);
+    let files: Vec<FilePart> = serde_json::from_str(&initial_json).map_err(|e| {
+        println!("Failed to parse JSON from {}: {}", initial_url, e); // Log parsing error
         e.to_string()
     })?;
 
-    for (filename, file_parts) in files {
+    let key = derive_key(PASSWORD, &SALT);
+
+    for file in files {
+        let file_url = format!("https://pst.innomi.net/paste/{}", file.title);
+        let file_json = download_json(Arc::clone(&client), &file_url).await?;
+        println!("File JSON: {}", file_json);
+
+        // Parse JSON into a vector of maps
+        let parts: Vec<HashMap<String, String>> = serde_json::from_str(&file_json).map_err(|e| {
+            println!("Failed to parse JSON from {}: {}", file_url, e); // Log parsing error
+            e.to_string()
+        })?;
+
         let (tx, rx): (Sender<(usize, Vec<u8>)>, Receiver<(usize, Vec<u8>)>) = channel();
         let mut handles = vec![];
 
         // Iterate over the parts
-        for (index, part_map) in file_parts.iter().enumerate() {
-            let part_url = part_map.values().next().unwrap();
+        for (index, part) in parts.iter().enumerate() {
+            let (part_name, part_url) = part.iter().next().unwrap();
             let client = Arc::clone(&client);
             let tx = tx.clone();
             let part_url = format!("https://pst.innomi.net/paste/{}", part_url);
+            let key_clone = key.clone();
             let handle = tokio::spawn(async move {
-                download_and_rebuild_part(client, part_url, tx, index).await;
+                download_and_decrypt_part(client, part_url, key_clone, tx, index).await;
             });
             handles.push(handle);
         }
@@ -275,7 +347,7 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
         join_all(handles).await;
 
         let mut part_data: Vec<(usize, Vec<u8>)> = vec![];
-        for _ in 0..file_parts.len() {
+        for _ in 0..parts.len() {
             if let Ok(part) = rx.recv() {
                 part_data.push(part);
             }
@@ -283,7 +355,8 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
         part_data.sort_by_key(|k| k.0);
         let combined_data: Vec<u8> = part_data.into_iter().flat_map(|(_, data)| data).collect();
 
-        let download_path = dirs::download_dir().unwrap().join(&filename);
+        let file_name = format!("rebuilt_file_{}", file.title);
+        let download_path = dirs::download_dir().unwrap().join(file_name);
         let mut file = File::create(&download_path).map_err(|e| e.to_string())?;
         file.write_all(&combined_data).map_err(|e| e.to_string())?;
 
@@ -293,10 +366,9 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     Ok(())
 }
 
-
 #[command]
 async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
-    let mut all_files: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut all_titles: Vec<serde_json::Value> = vec![];
     let file_names: Vec<String> = file_paths.iter().map(|path| {
         PathBuf::from(path).file_name().unwrap().to_str().unwrap().to_string()
     }).collect();
@@ -304,15 +376,24 @@ async fn process_files(file_paths: Vec<String>) -> Result<String, String> {
     for file_path in file_paths {
         // Process each file separately
         match process_single_file(file_path.clone()).await {
-            Ok((filename, links)) => {
-                all_files.insert(filename, links);
+            Ok(links) => {
+                // Save parts to response_text.json
+                let response_json = serde_json::to_string_pretty(&links).unwrap();
+                fs::write("response_text.json", &response_json).expect("Failed to save response_text.json");
+
+                // Upload response_text.json and get its title
+                let response_text_title = upload_response_text().await?;
+                all_titles.push(serde_json::json!({"title": response_text_title}));
+
+                // Clear response_text.json for the next file
+                fs::write("response_text.json", "[]").expect("Failed to clear response_text.json");
             },
             Err(e) => return Err(e),
         }
     }
 
-    // Save all files to file_data.json
-    let file_data_json = serde_json::to_string_pretty(&all_files).unwrap();
+    // Save all titles to file_data.json
+    let file_data_json = serde_json::to_string_pretty(&all_titles).unwrap();
     fs::write("file_data.json", &file_data_json).expect("Failed to save file_data.json");
 
     // Upload file_data.json and get its title
