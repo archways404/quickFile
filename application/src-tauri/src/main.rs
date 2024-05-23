@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{command, Builder, generate_context, generate_handler};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ use tokio::runtime::Runtime;
 use futures::future::join_all;
 use tempfile::NamedTempFile;
 use dirs;
-use html_escape;
+use html_escape::decode_html_entities;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
 const PASSWORD: &str = "your-secure-password";
@@ -34,10 +35,7 @@ struct FilePart {
     title: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct FileEntry {
-    part_name: String,
-}
+type FileEntry = HashMap<String, String>;
 
 fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
     let mut key = vec![0u8; 32];
@@ -165,6 +163,7 @@ async fn process_single_file(file_path: String) -> Result<Vec<serde_json::Value>
     join_all(handles).await;
 
     let mut links: Vec<(usize, String)> = vec![];
+    println!("Received links:");
     for _ in 0..temp_files.len() {
         if let Ok(link) = rx.recv() {
             links.push(link);
@@ -271,7 +270,7 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
         if let Some(code_div_content) = text.split(r#"<div class="code" id="code">"#).nth(1)
             .and_then(|body| body.split("</div>").next()) {
             // Decode HTML entities
-            let decoded_content = html_escape::decode_html_entities(&code_div_content);
+            let decoded_content = decode_html_entities(&code_div_content).to_string();
             // Clean and format JSON
             let cleaned_content = decoded_content.replace("&#34;", "\"").replace("\n", "").trim().to_string();
             return Ok(cleaned_content);
@@ -290,7 +289,7 @@ async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8
         if let Ok(body) = response.text().await {
             if let Some(code_div_content) = body.split(r#"<div class="code" id="code">"#).nth(1)
                 .and_then(|body| body.split("</div>").next()) {
-                    let decrypted_data = decrypt(&html_escape::decode_html_entities(&code_div_content), &key);
+                    let decrypted_data = decrypt(&decode_html_entities(&code_div_content), &key);
                     tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
                     println!("Downloaded part from link: {}", url);
             } else {
@@ -321,8 +320,10 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
     for file in files {
         let file_url = format!("https://pst.innomi.net/paste/{}", file.title);
         let file_json = download_json(Arc::clone(&client), &file_url).await?;
+        println!("File JSON: {}", file_json);
 
-        let parts: Vec<FileEntry> = serde_json::from_str(&file_json).map_err(|e| {
+        // Parse JSON into a vector of maps
+        let parts: Vec<HashMap<String, String>> = serde_json::from_str(&file_json).map_err(|e| {
             println!("Failed to parse JSON from {}: {}", file_url, e); // Log parsing error
             e.to_string()
         })?;
@@ -330,10 +331,12 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
         let (tx, rx): (Sender<(usize, Vec<u8>)>, Receiver<(usize, Vec<u8>)>) = channel();
         let mut handles = vec![];
 
+        // Iterate over the parts
         for (index, part) in parts.iter().enumerate() {
+            let (part_name, part_url) = part.iter().next().unwrap();
             let client = Arc::clone(&client);
             let tx = tx.clone();
-            let part_url = format!("https://pst.innomi.net/paste/{}", part.part_name);
+            let part_url = format!("https://pst.innomi.net/paste/{}", part_url);
             let key_clone = key.clone();
             let handle = tokio::spawn(async move {
                 download_and_decrypt_part(client, part_url, key_clone, tx, index).await;
@@ -409,7 +412,7 @@ async fn rebuild_files(title: String) -> Result<(), String> {
 }
 
 fn main() {
-    let rt = Runtime::new().unwrap();
+    let _rt = Runtime::new().unwrap();
     Builder::default()
         .invoke_handler(generate_handler![process_files, rebuild_files])
         .run(generate_context!())
