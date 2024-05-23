@@ -6,7 +6,6 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc::{channel, Sender, Receiver}};
-use openssl::symm::{Cipher, Crypter, Mode};
 use base64::{encode, decode};
 use serde::{Serialize, Deserialize};
 use reqwest::Client;
@@ -18,8 +17,6 @@ use dirs;
 use html_escape::decode_html_entities;
 
 const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 1MB
-const PASSWORD: &str = "your-secure-password";
-const SALT: [u8; 16] = [0; 16]; // Replace with a secure random salt
 
 #[derive(Serialize, Deserialize)]
 struct PartData {
@@ -41,85 +38,6 @@ struct PartLink {
 }
 
 type FileEntry = HashMap<String, String>;
-
-fn derive_key(password: &str, salt: &[u8]) -> Vec<u8> {
-    let mut key = vec![0u8; 32];
-    openssl::pkcs5::pbkdf2_hmac(password.as_bytes(), salt, 100_000, openssl::hash::MessageDigest::sha256(), &mut key).unwrap();
-    key
-}
-
-fn encrypt(data: &[u8], key: &[u8]) -> String {
-    let mut iv = vec![0; 16];
-    openssl::rand::rand_bytes(&mut iv).unwrap();
-    let mut crypter = Crypter::new(Cipher::aes_256_cbc(), Mode::Encrypt, key, Some(&iv)).unwrap();
-    let mut encrypted = vec![0; data.len() + Cipher::aes_256_cbc().block_size()];
-    let mut count = crypter.update(data, &mut encrypted).unwrap();
-    count += crypter.finalize(&mut encrypted[count..]).unwrap();
-    encrypted.truncate(count);
-    let mut result = iv.to_vec();
-    result.extend_from_slice(&encrypted);
-    encode(&result) // Base64 encode the final encrypted result
-}
-
-fn decrypt(encrypted_data: &str, key: &[u8]) -> Result<Vec<u8>, String> {
-    println!("Decrypting data...");
-
-    // Base64 decode the encrypted data
-    let data = match decode(encrypted_data) {
-        Ok(data) => data,
-        Err(e) => {
-            println!("Base64 decode error: {}", e);
-            return Err(e.to_string());
-        }
-    };
-
-    println!("Base64 decoded data length: {}", data.len());
-
-    // Split the IV and encrypted text
-    let (iv, encrypted_text) = data.split_at(16);
-    let mut crypter = match Crypter::new(Cipher::aes_256_cbc(), Mode::Decrypt, key, Some(iv)) {
-        Ok(crypter) => crypter,
-        Err(e) => {
-            println!("Crypter creation error: {}", e);
-            return Err(e.to_string());
-        }
-    };
-
-    // Prepare buffer for decrypted data
-    let mut decrypted = vec![0; encrypted_text.len() + Cipher::aes_256_cbc().block_size()];
-
-    // Decrypt the data
-    let mut count = match crypter.update(encrypted_text, &mut decrypted) {
-        Ok(count) => count,
-        Err(e) => {
-            println!("Update error: {}", e);
-            return Err(e.to_string());
-        }
-    };
-
-    // Finalize the decryption
-    count += match crypter.finalize(&mut decrypted[count..]) {
-        Ok(count) => count,
-        Err(e) => {
-            println!("Finalize error: {}", e);
-            return Err(e.to_string());
-        }
-    };
-
-    // Truncate to the actual size of the decrypted data
-    decrypted.truncate(count);
-
-    println!("Decrypted data length: {}", decrypted.len());
-
-    // The decrypted data should be base64 decoded again to get the original content
-    match decode(&String::from_utf8(decrypted).unwrap()) {
-        Ok(data) => Ok(data),
-        Err(e) => {
-            println!("Final Base64 decode error: {}", e);
-            Err(e.to_string())
-        }
-    }
-}
 
 async fn upload_part(client: Arc<Client>, part_path: String, tx: Sender<(usize, String)>, index: usize) {
     let part_content = match fs::read_to_string(&part_path) {
@@ -190,12 +108,8 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
     // Base64 encode the file content
     let base64_encoded_data = encode(&file_content);
 
-    // Encrypt the base64 encoded content
-    let key = derive_key(PASSWORD, &SALT);
-    let encrypted_data = encrypt(base64_encoded_data.as_bytes(), &key);
-
-    // Split the encrypted content into 1MB chunks and write to temporary files
-    let temp_files = split_into_temp_files(encrypted_data.as_bytes(), CHUNK_SIZE)
+    // Split the base64 encoded content into 1MB chunks and write to temporary files
+    let temp_files = split_into_temp_files(base64_encoded_data.as_bytes(), CHUNK_SIZE)
         .map_err(|e| format!("Splitting into temp files failed: {}", e.to_string()))?;
 
     // Upload the chunks
@@ -231,7 +145,6 @@ async fn process_single_file(file_path: String) -> Result<(String, Vec<serde_jso
     let filename = PathBuf::from(file_path).file_name().unwrap().to_str().unwrap().to_string();
     Ok((filename, formatted_links))
 }
-
 
 async fn upload_response_text() -> Result<String, String> {
     let client = Client::new();
@@ -339,7 +252,7 @@ async fn download_json(client: Arc<Client>, url: &str) -> Result<String, String>
     }
 }
 
-async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8>, tx: Sender<(usize, Vec<u8>)>, index: usize) {
+async fn download_and_rebuild_part(client: Arc<Client>, url: String, tx: Sender<(usize, Vec<u8>)>, index: usize) {
     println!("Downloading part from link: {}", url);
 
     if let Ok(response) = client.get(&url).send().await {
@@ -347,14 +260,11 @@ async fn download_and_decrypt_part(client: Arc<Client>, url: String, key: Vec<u8
             if let Some(code_div_content) = body.split(r#"<div class="code" id="code">"#).nth(1)
                 .and_then(|body| body.split("</div>").next()) {
                     let decoded_content = decode_html_entities(&code_div_content).to_string();
-                    match decrypt(&decoded_content, &key) {
-                        Ok(decrypted_data) => {
-                            tx.send((index, decrypted_data)).expect("Failed to send downloaded part");
-                            println!("Downloaded and decrypted part from link: {}", url);
-                        }
-                        Err(e) => {
-                            println!("Failed to decrypt part from link: {}: {}", url, e);
-                        }
+                    if let Ok(decoded_data) = decode(&decoded_content) {
+                        tx.send((index, decoded_data)).expect("Failed to send downloaded part");
+                        println!("Downloaded part from link: {}", url);
+                    } else {
+                        println!("Failed to decode part content from link: {}", url);
                     }
             } else {
                 println!("Failed to parse part content from link: {}", url);
@@ -379,8 +289,6 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
         e.to_string()
     })?;
 
-    let key = derive_key(PASSWORD, &SALT);
-
     for (filename, file_parts) in files {
         let (tx, rx): (Sender<(usize, Vec<u8>)>, Receiver<(usize, Vec<u8>)>) = channel();
         let mut handles = vec![];
@@ -391,9 +299,8 @@ async fn download_and_rebuild_files(title: String) -> Result<(), String> {
             let client = Arc::clone(&client);
             let tx = tx.clone();
             let part_url = format!("https://pst.innomi.net/paste/{}", part_url);
-            let key_clone = key.clone();
             let handle = tokio::spawn(async move {
-                download_and_decrypt_part(client, part_url, key_clone, tx, index).await;
+                download_and_rebuild_part(client, part_url, tx, index).await;
             });
             handles.push(handle);
         }
